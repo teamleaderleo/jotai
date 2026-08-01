@@ -118,9 +118,17 @@ export function createJSONStorage<Value>(
   options?: JsonStorageOptions,
 ): AsyncStorage<Value> | SyncStorage<Value> {
   const cachedValues = new Map<string, { str: string; value: Value }>()
+  const readGenerations = new Map<string, number>()
+
+  const advanceReadGeneration = (key: string) => {
+    const generation = (readGenerations.get(key) ?? 0) + 1
+    readGenerations.set(key, generation)
+    return generation
+  }
 
   const storage: AsyncStorage<Value> | SyncStorage<Value> = {
     getItem: (key, initialValue) => {
+      const generation = advanceReadGeneration(key)
       const parse = (str: string | null) => {
         str = str || ''
         const cached = cachedValues.get(key)
@@ -129,10 +137,14 @@ export function createJSONStorage<Value>(
         }
         try {
           const value = JSON.parse(str, options?.reviver) as Value
-          cachedValues.set(key, { str, value })
+          if (readGenerations.get(key) === generation) {
+            cachedValues.set(key, { str, value })
+          }
           return value
         } catch {
-          cachedValues.delete(key)
+          if (readGenerations.get(key) === generation) {
+            cachedValues.delete(key)
+          }
           return initialValue
         }
       }
@@ -149,6 +161,7 @@ export function createJSONStorage<Value>(
       ),
     removeItem: (key) => {
       const invalidate = () => {
+        advanceReadGeneration(key)
         cachedValues.delete(key)
       }
       const stringStorage = getStringStorage()

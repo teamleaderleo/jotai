@@ -1,0 +1,56 @@
+name: Unit 20 direct source validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/vanilla/utils/atomWithStorage.ts'
+      - 'tests/react/vanilla-utils/atomWithStorageKeyIsolation.test.ts'
+      - 'tests/react/vanilla-utils/atomWithStorageReadInvalidation.test.ts'
+      - '.github/workflows/unit20-direct-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Node.js ${{ matrix.node-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - 22
+          - 24
+          - 26
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: pnpm install --frozen-lockfile
+      - name: Focused storage tests
+        run: |
+          pnpm vitest run \
+            tests/react/vanilla-utils/atomWithStorageKeyIsolation.test.ts \
+            tests/react/vanilla-utils/atomWithStorageReadInvalidation.test.ts \
+            tests/react/vanilla-utils/atomWithStorage.test.tsx
+      - name: Changed-file checks
+        run: |
+          pnpm eslint \
+            src/vanilla/utils/atomWithStorage.ts \
+            tests/react/vanilla-utils/atomWithStorageKeyIsolation.test.ts \
+            tests/react/vanilla-utils/atomWithStorageReadInvalidation.test.ts
+          pnpm prettier --check \
+            src/vanilla/utils/atomWithStorage.ts \
+            tests/react/vanilla-utils/atomWithStorageKeyIsolation.test.ts \
+            tests/react/vanilla-utils/atomWithStorageReadInvalidation.test.ts
+          pnpm tsc --noEmit
+      - name: Build
+        run: pnpm run build

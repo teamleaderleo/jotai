@@ -117,22 +117,24 @@ export function createJSONStorage<Value>(
   },
   options?: JsonStorageOptions,
 ): AsyncStorage<Value> | SyncStorage<Value> {
-  let lastStr: string | undefined
-  let lastValue: Value
+  const cachedValues = new Map<string, { str: string; value: Value }>()
 
   const storage: AsyncStorage<Value> | SyncStorage<Value> = {
     getItem: (key, initialValue) => {
       const parse = (str: string | null) => {
         str = str || ''
-        if (lastStr !== str) {
-          try {
-            lastValue = JSON.parse(str, options?.reviver)
-          } catch {
-            return initialValue
-          }
-          lastStr = str
+        const cached = cachedValues.get(key)
+        if (cached?.str === str) {
+          return cached.value
         }
-        return lastValue
+        try {
+          const value = JSON.parse(str, options?.reviver) as Value
+          cachedValues.set(key, { str, value })
+          return value
+        } catch {
+          cachedValues.delete(key)
+          return initialValue
+        }
       }
       const str = getStringStorage()?.getItem(key) ?? null
       if (isPromiseLike(str)) {
@@ -145,7 +147,35 @@ export function createJSONStorage<Value>(
         key,
         JSON.stringify(newValue, options?.replacer),
       ),
-    removeItem: (key) => getStringStorage()?.removeItem(key),
+    removeItem: (key) => {
+      const invalidate = () => {
+        cachedValues.delete(key)
+      }
+      const stringStorage = getStringStorage()
+      if (!stringStorage) {
+        invalidate()
+        return
+      }
+      try {
+        const result = stringStorage.removeItem(key)
+        if (isPromiseLike(result)) {
+          return result.then(
+            () => {
+              invalidate()
+            },
+            (error) => {
+              invalidate()
+              throw error
+            },
+          ) as never
+        }
+        invalidate()
+        return result
+      } catch (error) {
+        invalidate()
+        throw error
+      }
+    },
   }
 
   const createHandleSubscribe =

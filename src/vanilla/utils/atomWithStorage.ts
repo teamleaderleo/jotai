@@ -224,6 +224,7 @@ export function atomWithStorage<Value>(
   options?: { getOnInit?: boolean },
 ) {
   const getOnInit = options?.getOnInit
+  let writeGeneration = 0
   const baseAtom = atom(
     getOnInit
       ? (storage.getItem(key, initialValue) as Value | Promise<Value>)
@@ -250,12 +251,16 @@ export function atomWithStorage<Value>(
               ) => Value | Promise<Value> | typeof RESET
             )(get(baseAtom))
           : update
+      const generation = ++writeGeneration
       if (nextValue === RESET) {
         set(baseAtom, initialValue)
         return storage.removeItem(key)
       }
       if (isPromiseLike(nextValue)) {
         return nextValue.then((resolvedValue) => {
+          if (generation !== writeGeneration) {
+            return
+          }
           set(baseAtom, resolvedValue)
           return storage.setItem(key, resolvedValue)
         })

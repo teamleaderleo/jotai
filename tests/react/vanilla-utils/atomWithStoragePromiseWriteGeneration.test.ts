@@ -86,6 +86,63 @@ describe('atomWithStorage promised write generation', () => {
     expect(writes).toEqual([2])
   })
 
+  it('applies invocation authority to functional promised updates', async () => {
+    const { storage, writes } = createStorage()
+    const countAtom = atomWithStorage('count', 0, storage)
+    const store = createStore()
+    const olderValue = deferred<number>()
+
+    const olderWrite = store.set(countAtom, (currentValue) => {
+      expect(currentValue).toBe(0)
+      return olderValue.promise
+    })
+    await store.set(countAtom, 2)
+
+    olderValue.resolve(1)
+    await olderWrite
+
+    expect(store.get(countAtom)).toBe(2)
+    expect(writes).toEqual([2])
+  })
+
+  it('treats a newer rejected promise as a superseding invocation', async () => {
+    const { storage, writes } = createStorage()
+    const countAtom = atomWithStorage('count', 0, storage)
+    const store = createStore()
+    const olderValue = deferred<number>()
+    const newerValue = deferred<number>()
+
+    const olderWrite = store.set(countAtom, olderValue.promise)
+    const newerWrite = store.set(countAtom, newerValue.promise)
+
+    newerValue.reject(new Error('newer update failed'))
+    await expect(newerWrite).rejects.toThrow('newer update failed')
+
+    olderValue.resolve(1)
+    await olderWrite
+
+    expect(store.get(countAtom)).toBe(0)
+    expect(writes).toEqual([])
+  })
+
+  it('keeps write generations local to each atom instance', async () => {
+    const { storage, writes } = createStorage()
+    const firstAtom = atomWithStorage('first', 0, storage)
+    const secondAtom = atomWithStorage('second', 0, storage)
+    const store = createStore()
+    const firstValue = deferred<number>()
+
+    const firstWrite = store.set(firstAtom, firstValue.promise)
+    await store.set(secondAtom, 2)
+
+    firstValue.resolve(1)
+    await firstWrite
+
+    expect(store.get(firstAtom)).toBe(1)
+    expect(store.get(secondAtom)).toBe(2)
+    expect(writes).toEqual([2, 1])
+  })
+
   it('keeps stale rejection caller-visible without changing newer state', async () => {
     const { storage, writes } = createStorage()
     const countAtom = atomWithStorage('count', 0, storage)

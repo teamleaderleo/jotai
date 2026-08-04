@@ -1,0 +1,139 @@
+name: Fieldwork 235 key-scoped JSON cache
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/235/materialize_key_scoped_json_cache.py
+      - .github/workflows/fieldwork-235-key-scoped-json-cache.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-235-key-scoped-json-cache-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_BASE: 76bc2e8f86333d57b30e5fc3fab5d52a5cc2e1b4
+  SOURCE_BRANCH: candidate/235-key-scoped-json-cache-current-main
+  SOURCE_PATH: src/vanilla/utils/atomWithStorage.ts
+  TEST_PATH: tests/react/vanilla-utils/atomWithStorageKeyIsolation.test.ts
+
+jobs:
+  validate-and-publish:
+    name: Validate and publish exact two-file Jotai source
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact base and experiment fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base HEAD "$PUBLIC_BASE")" = "$PUBLIC_BASE"
+          expected=$(printf '%s\n' \
+            .github/fieldwork/235/materialize_key_scoped_json_cache.py \
+            .github/workflows/fieldwork-235-key-scoped-json-cache.yml | sort)
+          actual=$(git diff --name-only "$PUBLIC_BASE..HEAD" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$PUBLIC_BASE..HEAD"
+          python -m py_compile \
+            .github/fieldwork/235/materialize_key_scoped_json_cache.py
+
+      - name: Set up repository Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          node --version
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Generate and format exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p receipt "$RUNNER_TEMP/jotai-source"
+          python .github/fieldwork/235/materialize_key_scoped_json_cache.py
+          pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --write
+          pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --check \
+            2>&1 | tee receipt/focused-format.log
+          git diff --check
+          expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
+          actual=$(git diff --name-only "$PUBLIC_BASE" | sort)
+          test "$actual" = "$expected"
+          git diff -- "$SOURCE_PATH" "$TEST_PATH" > receipt/source.diff
+          cp "$SOURCE_PATH" "$RUNNER_TEMP/jotai-source/atomWithStorage.ts"
+          cp "$TEST_PATH" "$RUNNER_TEMP/jotai-source/atomWithStorageKeyIsolation.test.ts"
+          {
+            echo "experiment_head=$(git rev-parse HEAD)"
+            echo "public_base=$PUBLIC_BASE"
+            echo "source_path=$SOURCE_PATH"
+            echo "test_path=$TEST_PATH"
+            echo "node=$(node --version)"
+            echo "pnpm=$(pnpm --version)"
+          } > receipt/identity.txt
+
+      - name: Run focused storage controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run \
+            "$TEST_PATH" \
+            tests/react/vanilla-utils/atomWithStorage.test.tsx \
+            2>&1 | tee receipt/focused-tests.log
+
+      - name: Run repository format, lint, and type gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run test:format 2>&1 | tee receipt/format.log
+          pnpm run test:lint 2>&1 | tee receipt/lint.log
+          pnpm run test:types 2>&1 | tee receipt/types.log
+
+      - name: Run full repository specs and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run test:spec 2>&1 | tee receipt/spec.log
+          pnpm run build 2>&1 | tee receipt/build.log
+
+      - name: Publish exact tested source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard
+          git clean -fdx
+          git checkout --detach "$PUBLIC_BASE"
+          mkdir -p "$(dirname "$SOURCE_PATH")" "$(dirname "$TEST_PATH")"
+          cp "$RUNNER_TEMP/jotai-source/atomWithStorage.ts" "$SOURCE_PATH"
+          cp "$RUNNER_TEMP/jotai-source/atomWithStorageKeyIsolation.test.ts" "$TEST_PATH"
+          git diff --check
+          expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
+          actual=$(git diff --name-only "$PUBLIC_BASE" | sort)
+          test "$actual" = "$expected"
+          git config user.name 'Fieldwork Agent'
+          git config user.email 'fieldwork-agent@users.noreply.github.com'
+          git checkout -B "$SOURCE_BRANCH"
+          git add "$SOURCE_PATH" "$TEST_PATH"
+          git commit -m 'fix(utils): isolate JSON storage cache identity by key'
+          git push --force-with-lease origin "HEAD:refs/heads/$SOURCE_BRANCH"
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-235-key-scoped-json-cache
+          path: receipt/
+          if-no-files-found: warn
+          retention-days: 30

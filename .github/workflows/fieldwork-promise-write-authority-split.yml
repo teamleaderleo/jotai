@@ -1,0 +1,136 @@
+name: Validate promised write authority split
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/promise-write-authority-split.py
+      - .github/workflows/fieldwork-promise-write-authority-split.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promised-write-authority-split-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_BASE: 26208a02306b2d75fdccfa782363e0e4bc929bf9
+  SOURCE_BRANCH: candidate/promise-write-authority-split
+  SOURCE_PATH: src/vanilla/utils/atomWithStorage.ts
+  TEST_PATH: tests/react/vanilla-utils/atomWithStoragePromiseWriteAuthoritySplit.test.ts
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify carrier and preserve generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "$(git merge-base HEAD "$SOURCE_BASE")" = "$SOURCE_BASE"
+          expected=$(printf '%s\n' \
+            .github/fieldwork/promise-write-authority-split.py \
+            .github/workflows/fieldwork-promise-write-authority-split.yml | sort)
+          actual=$(git diff --name-only "$SOURCE_BASE..HEAD" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$SOURCE_BASE..HEAD"
+          python -m py_compile .github/fieldwork/promise-write-authority-split.py
+          cp .github/fieldwork/promise-write-authority-split.py \
+            "$RUNNER_TEMP/promise-write-authority-split.py"
+
+      - name: Set up repository Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          node --version
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Generate exact split candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_BASE"
+          mkdir -p receipt
+          python "$RUNNER_TEMP/promise-write-authority-split.py"
+          pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --write
+          pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --check \
+            2>&1 | tee receipt/focused-format.log
+          git add -N "$TEST_PATH"
+          expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
+          actual=$(git diff --name-only "$SOURCE_BASE" | sort)
+          printf '%s\n' "$actual" > receipt/product-files.txt
+          test "$actual" = "$expected"
+          git diff --check "$SOURCE_BASE"
+          git diff -- "$SOURCE_PATH" "$TEST_PATH" > receipt/source.diff
+          {
+            echo "carrier_head=${{ github.event.pull_request.head.sha }}"
+            echo "source_base=$SOURCE_BASE"
+            echo "node=$(node --version)"
+            echo "pnpm=$(pnpm --version)"
+          } > receipt/identity.txt
+
+      - name: Run focused promised-write controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run \
+            "$TEST_PATH" \
+            tests/react/vanilla-utils/atomWithStoragePromiseWriteGeneration.test.ts \
+            tests/react/vanilla-utils/atomWithStorage.test.tsx \
+            2>&1 | tee receipt/focused-tests.log
+
+      - name: Run repository format, lint, and type gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run test:format 2>&1 | tee receipt/format.log
+          pnpm run test:lint 2>&1 | tee receipt/lint.log
+          pnpm run test:types 2>&1 | tee receipt/types.log
+
+      - name: Run full repository specs and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run test:spec 2>&1 | tee receipt/spec.log
+          pnpm run build 2>&1 | tee receipt/build.log
+
+      - name: Publish exact source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
+          actual=$(git diff --name-only "$SOURCE_BASE" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$SOURCE_BASE"
+          git config user.name 'Fieldwork Agent'
+          git config user.email 'fieldwork-agent@users.noreply.github.com'
+          git checkout -B "$SOURCE_BRANCH"
+          git add "$SOURCE_PATH" "$TEST_PATH"
+          git diff --cached --check
+          git commit -m 'fix(utils): split promised write authority'
+          git push --force-with-lease origin "HEAD:refs/heads/$SOURCE_BRANCH"
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: promised-write-authority-split
+          path: receipt/
+          if-no-files-found: warn
+          retention-days: 30

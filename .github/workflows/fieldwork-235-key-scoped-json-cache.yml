@@ -72,6 +72,7 @@ jobs:
           pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --write
           pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --check \
             2>&1 | tee receipt/focused-format.log
+          git add -N "$TEST_PATH"
           git diff --check
           expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
           actual=$(git diff --name-only "$PUBLIC_BASE" | sort)
@@ -107,6 +108,7 @@ jobs:
           mkdir -p "$(dirname "$SOURCE_PATH")" "$(dirname "$TEST_PATH")"
           cp "$RUNNER_TEMP/jotai-source/atomWithStorage.ts" "$SOURCE_PATH"
           cp "$RUNNER_TEMP/jotai-source/atomWithStorageKeyIsolation.test.ts" "$TEST_PATH"
+          git add -N "$TEST_PATH"
           git diff --check
           expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
           actual=$(git diff --name-only "$PUBLIC_BASE" | sort)

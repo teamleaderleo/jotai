@@ -224,7 +224,8 @@ export function atomWithStorage<Value>(
   options?: { getOnInit?: boolean },
 ) {
   const getOnInit = options?.getOnInit
-  let writeGeneration = 0
+  let storageWriteGeneration = 0
+  const stateWriteGenerationAtom = atom(0)
   const baseAtom = atom(
     getOnInit
       ? (storage.getItem(key, initialValue) as Value | Promise<Value>)
@@ -232,6 +233,7 @@ export function atomWithStorage<Value>(
   )
 
   if (import.meta.env?.MODE !== 'production') {
+    stateWriteGenerationAtom.debugPrivate = true
     baseAtom.debugPrivate = true
   }
 
@@ -243,6 +245,18 @@ export function atomWithStorage<Value>(
   const anAtom = atom(
     (get) => get(baseAtom),
     (get, set, update: SetStateActionWithReset<Value | Promise<Value>>) => {
+      // State authority belongs to each store. Persistence authority belongs to
+      // the atom instance because every store writes through the same storage.
+      // Allocate both receipts before updater evaluation so a nested later write
+      // cannot be overtaken when the outer updater returns.
+      const stateGeneration = get(stateWriteGenerationAtom) + 1
+      set(stateWriteGenerationAtom, stateGeneration)
+      const storageGeneration = ++storageWriteGeneration
+      const isCurrentStateWrite = () =>
+        get(stateWriteGenerationAtom) === stateGeneration
+      const isCurrentStorageWrite = () =>
+        storageWriteGeneration === storageGeneration
+
       const nextValue =
         typeof update === 'function'
           ? (
@@ -251,22 +265,31 @@ export function atomWithStorage<Value>(
               ) => Value | Promise<Value> | typeof RESET
             )(get(baseAtom))
           : update
-      const generation = ++writeGeneration
       if (nextValue === RESET) {
-        set(baseAtom, initialValue)
-        return storage.removeItem(key)
+        if (isCurrentStateWrite()) {
+          set(baseAtom, initialValue)
+        }
+        if (isCurrentStorageWrite()) {
+          return storage.removeItem(key)
+        }
+        return
       }
       if (isPromiseLike(nextValue)) {
         return nextValue.then((resolvedValue) => {
-          if (generation !== writeGeneration) {
-            return
+          if (isCurrentStateWrite()) {
+            set(baseAtom, resolvedValue)
           }
-          set(baseAtom, resolvedValue)
-          return storage.setItem(key, resolvedValue)
+          if (isCurrentStorageWrite()) {
+            return storage.setItem(key, resolvedValue)
+          }
         })
       }
-      set(baseAtom, nextValue)
-      return storage.setItem(key, nextValue)
+      if (isCurrentStateWrite()) {
+        set(baseAtom, nextValue)
+      }
+      if (isCurrentStorageWrite()) {
+        return storage.setItem(key, nextValue)
+      }
     },
   )
 

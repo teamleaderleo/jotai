@@ -16,6 +16,7 @@ concurrency:
 
 env:
   PUBLIC_BASE: 76bc2e8f86333d57b30e5fc3fab5d52a5cc2e1b4
+  INPUT_HEAD: ${{ github.event.pull_request.head.sha }}
   SOURCE_BRANCH: candidate/235-key-scoped-json-cache-current-main
   SOURCE_PATH: src/vanilla/utils/atomWithStorage.ts
   TEST_PATH: tests/react/vanilla-utils/atomWithStorageKeyIsolation.test.ts
@@ -26,16 +27,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Check out exact experiment
+      - name: Check out exact experiment head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Verify exact base and experiment fence
+      - name: Verify carrier and preserve generators
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$INPUT_HEAD"
           test "$(git merge-base HEAD "$PUBLIC_BASE")" = "$PUBLIC_BASE"
           expected=$(printf '%s\n' \
             .github/fieldwork/235/materialize_key_scoped_json_cache.py \
@@ -47,6 +50,10 @@ jobs:
           python -m py_compile \
             .github/fieldwork/235/materialize_key_scoped_json_cache.py \
             .github/fieldwork/235/polish_key_scoped_json_cache.py
+          cp .github/fieldwork/235/materialize_key_scoped_json_cache.py \
+            "$RUNNER_TEMP/materialize_key_scoped_json_cache.py"
+          cp .github/fieldwork/235/polish_key_scoped_json_cache.py \
+            "$RUNNER_TEMP/polish_key_scoped_json_cache.py"
 
       - name: Set up repository Node version
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -62,13 +69,14 @@ jobs:
           pnpm --version
           pnpm install --frozen-lockfile
 
-      - name: Generate and format exact candidate
+      - name: Generate and format exact source on public base
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p receipt "$RUNNER_TEMP/jotai-source"
-          python .github/fieldwork/235/materialize_key_scoped_json_cache.py
-          python .github/fieldwork/235/polish_key_scoped_json_cache.py
+          git checkout --detach "$PUBLIC_BASE"
+          mkdir -p receipt
+          python "$RUNNER_TEMP/materialize_key_scoped_json_cache.py"
+          python "$RUNNER_TEMP/polish_key_scoped_json_cache.py"
           pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --write
           pnpm exec prettier "$SOURCE_PATH" "$TEST_PATH" --check \
             2>&1 | tee receipt/focused-format.log
@@ -76,12 +84,11 @@ jobs:
           git diff --check
           expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
           actual=$(git diff --name-only "$PUBLIC_BASE" | sort)
+          printf '%s\n' "$actual" > receipt/product-files.txt
           test "$actual" = "$expected"
           git diff -- "$SOURCE_PATH" "$TEST_PATH" > receipt/source.diff
-          cp "$SOURCE_PATH" "$RUNNER_TEMP/jotai-source/atomWithStorage.ts"
-          cp "$TEST_PATH" "$RUNNER_TEMP/jotai-source/atomWithStorageKeyIsolation.test.ts"
           {
-            echo "experiment_head=$(git rev-parse HEAD)"
+            echo "experiment_head=$INPUT_HEAD"
             echo "public_base=$PUBLIC_BASE"
             echo "source_path=$SOURCE_PATH"
             echo "test_path=$TEST_PATH"
@@ -97,22 +104,6 @@ jobs:
             "$TEST_PATH" \
             tests/react/vanilla-utils/atomWithStorage.test.tsx \
             2>&1 | tee receipt/focused-tests.log
-
-      - name: Switch to the exact source-only worktree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git reset --hard
-          git clean -fd -e receipt/
-          git checkout --detach "$PUBLIC_BASE"
-          mkdir -p "$(dirname "$SOURCE_PATH")" "$(dirname "$TEST_PATH")"
-          cp "$RUNNER_TEMP/jotai-source/atomWithStorage.ts" "$SOURCE_PATH"
-          cp "$RUNNER_TEMP/jotai-source/atomWithStorageKeyIsolation.test.ts" "$TEST_PATH"
-          git add -N "$TEST_PATH"
-          git diff --check
-          expected=$(printf '%s\n' "$SOURCE_PATH" "$TEST_PATH" | sort)
-          actual=$(git diff --name-only "$PUBLIC_BASE" | sort)
-          test "$actual" = "$expected"
 
       - name: Run repository format, lint, and type gates
         shell: bash
@@ -141,6 +132,7 @@ jobs:
           git config user.email 'fieldwork-agent@users.noreply.github.com'
           git checkout -B "$SOURCE_BRANCH"
           git add "$SOURCE_PATH" "$TEST_PATH"
+          git diff --cached --check
           git commit -m 'fix(utils): isolate JSON storage cache identity by key'
           git push --force-with-lease origin "HEAD:refs/heads/$SOURCE_BRANCH"
 
